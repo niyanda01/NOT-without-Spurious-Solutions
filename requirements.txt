@@ -2,3 +2,4 @@ numpy==1.26.4
 matplotlib==3.8.4
 ipython==8.18.1
 POT==0.9.4
+torchvision
