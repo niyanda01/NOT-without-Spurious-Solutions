@@ -20,6 +20,9 @@ dist/
 *.log
 logs/
 
+# Cluster-specific SLURM job scripts (paths, partitions, nodes)
+*.sbatch
+
 # OS files
 .DS_Store
 Thumbs.db
