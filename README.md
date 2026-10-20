@@ -105,8 +105,8 @@ The c-concavity constraint thus makes the problem easier for gradient methods, b
 
 Together, these observations give a simple recipe. **Leave the potential unconstrained, and use an optimizer that converges to stationary points.** Every stationary global solution is then an OT map, so no regularization of the objective or smoothing of $\mu$ is needed. We apply EG to two formulations that share the same objective $\mathcal{L}$:
 
-- **Semi-Dual OT** ($\max_V \min_T \mathcal{L}(T, V)$): the formulation used in prior work.
-- **Lagrangian-based OT** ($\min_T \max_V \mathcal{L}(T, V)$): the same objective with the order of min and max swapped. Here $V$ acts as a Lagrange multiplier for the constraint $T_\sharp(\mu\times\xi) = \nu$. **Every global solution of this formulation is an OT map**, so spurious solutions are ruled out by the formulation itself. Because the inner $\max_V$ is $+\infty$ unless the constraint holds, the formulation is intractable for GDmax. EG never needs an inner maximization oracle, so it can still train it.
+- **Semi-Dual OT**: $\max_V \min_T \mathcal{L}(T, V)$, the formulation used in prior work.
+- **Lagrangian-based OT**: $\min_T \max_V \mathcal{L}(T, V)$, the same objective with the order of min and max swapped. Here $V$ acts as a Lagrange multiplier for the constraint $T_\sharp(\mu\times\xi) = \nu$. **Every global solution of this formulation is an OT map**, so spurious solutions are ruled out by the formulation itself. Because the inner $\max_V$ is $+\infty$ unless the constraint holds, the formulation is intractable for GDmax. EG never needs an inner maximization oracle, so it can still train it.
 
 Since the objective is identical, **the two formulations differ only in the ratio of the step sizes**. The inner (faster) player gets the larger step size:
 
@@ -186,7 +186,7 @@ python scripts/run_handbags_to_shoes.py --method eg --lr-T 1e-4 --lr-f 2e-4 --ou
 python scripts/run_handbags_to_shoes.py --method eg --lr-T 1e-4 --lr-f 5e-4 --out-dir outputs/handbags_to_shoes/eg_tts_f5x
 ```
 
-Each run writes the following to its output directory: sample figures, checkpoints (including the best-$D_\text{target}$ model), `config.json`, `metrics.csv` (loss and gradient norms), and `ot_metrics.csv` ($D_\text{cost}$, $D_\text{target}$). A finished run is only replaced when `--overwrite` is passed.
+Each run writes the following to its output directory: sample figures, checkpoints, the checkpoint with the lowest $D_\text{target}$ so far, `config.json`, `metrics.csv` (loss and gradient norms), and `ot_metrics.csv` ($D_\text{cost}$, $D_\text{target}$). A finished run is only replaced when `--overwrite` is passed.
 
 ## Citation
 
