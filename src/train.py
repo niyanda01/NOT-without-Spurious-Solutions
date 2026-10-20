@@ -4,9 +4,18 @@ import math
 import os
 
 import torch
+from IPython import get_ipython
 from IPython.display import clear_output
 
 from src.utils import grad_norm
+
+
+def _clear_output():
+    """Clear the cell output inside IPython/Jupyter. In a plain script (e.g. a
+    SLURM job) IPython's fallback would write terminal escape codes into the
+    log instead, so it is a no-op there."""
+    if get_ipython() is not None:
+        clear_output(wait=True)
 
 
 def _clip_grad_list(grads, max_norm):
@@ -16,6 +25,11 @@ def _clip_grad_list(grads, max_norm):
     if clip_coef >= 1:
         return list(grads)
     return [g * clip_coef for g in grads]
+
+
+def _set_lr(optimizer, lr):
+    for group in optimizer.param_groups:
+        group["lr"] = lr
 
 
 def _init_metrics_log(log_dir):
@@ -40,13 +54,16 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
                  batch_size_x=1024, batch_size_y=1024,
                  noise_fn=None, lr_schedule=None,
                  log_every=500, callback=None, device=None, log_dir=None,
-                 grad_clip=None, optimizer_kwargs=None):
+                 grad_clip=None, optimizer_kwargs=None, lr_schedule_every=None,
+                 resample_each_step=False):
     """GDmax: K inner Adam steps minimizing over T, then one Adam step maximizing over f.
 
     Args:
         noise_fn: optional (step, x) -> x, applied to each mu-batch before use.
         lr_schedule: optional step -> (lr_T, lr_f), applied to the optimizers'
             param groups every log_every steps.
+        lr_schedule_every: if set, lr_schedule(step) is instead applied at the
+            start of every step divisible by it (1 = per-step, as LambdaLR).
         callback: optional (step, T, f), invoked every log_every steps.
         log_dir: optional directory to write a metrics.csv (step, loss, grad_T,
             grad_f) row every log_every steps.
@@ -54,6 +71,9 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
             before each optimizer step.
         optimizer_kwargs: optional dict merged into both Adam constructors
             (e.g. betas, amsgrad, weight_decay).
+        resample_each_step: if True, draw a fresh mu-batch for every inner T
+            step and fresh mu/nu-batches for the f step (as in the original
+            NOT code) instead of reusing one pair of batches for all K+1 steps.
 
     Returns:
         {"loss": [...], "grad_T": [...], "grad_f": [...]}
@@ -70,12 +90,21 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
     loss_hist, grad_T_hist, grad_f_hist = [], [], []
 
     for step in range(n_steps):
+        if lr_schedule is not None and lr_schedule_every and step % lr_schedule_every == 0:
+            new_lr_T, new_lr_f = lr_schedule(step)
+            _set_lr(optimizer_T, new_lr_T)
+            _set_lr(optimizer_f, new_lr_f)
+
         x = sample_mu(batch_size_x).to(device)
         y = sample_nu(batch_size_y).to(device)
         if noise_fn is not None:
             x = noise_fn(step, x)
 
-        for _ in range(K):
+        for k in range(K):
+            if resample_each_step and k > 0:
+                x = sample_mu(batch_size_x).to(device)
+                if noise_fn is not None:
+                    x = noise_fn(step, x)
             Tx = T(x)
             loss = cost(x, Tx).mean() - f(Tx).mean() + f(y).mean()
 
@@ -84,6 +113,12 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
             if grad_clip is not None:
                 torch.nn.utils.clip_grad_norm_(T.parameters(), grad_clip)
             optimizer_T.step()
+
+        if resample_each_step:
+            x = sample_mu(batch_size_x).to(device)
+            y = sample_nu(batch_size_y).to(device)
+            if noise_fn is not None:
+                x = noise_fn(step, x)
 
         Tx = T(x)
         loss = cost(x, Tx).mean() - f(Tx).mean() + f(y).mean()
@@ -105,7 +140,7 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
         grad_f_hist.append(grad_norm(f_grads).item())
 
         if (step + 1) % log_every == 0:
-            if lr_schedule is not None:
+            if lr_schedule is not None and not lr_schedule_every:
                 new_lr_T, new_lr_f = lr_schedule(step)
                 for group in optimizer_T.param_groups:
                     group["lr"] = new_lr_T
@@ -114,7 +149,7 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
 
             _append_metrics_log(metrics_csv_path, step + 1, loss_hist[-1], grad_T_hist[-1], grad_f_hist[-1])
 
-            clear_output(wait=True)
+            _clear_output()
             print(f"step {step + 1}, loss {loss.item():.4f}")
             if callback is not None:
                 callback(step, T, f)
@@ -229,7 +264,7 @@ def train_bppm(T, f, sample_mu, sample_nu, cost,
 
             _append_metrics_log(metrics_csv_path, step + 1, loss_hist[-1], grad_T_hist[-1], grad_f_hist[-1])
 
-            clear_output(wait=True)
+            _clear_output()
             print(f"step {step + 1}, loss {loss.item():.4f}")
             if callback is not None:
                 callback(step, T, f)
@@ -331,7 +366,7 @@ def train_ogda(T, f, sample_mu, sample_nu, cost,
 
             _append_metrics_log(metrics_csv_path, step + 1, loss_hist[-1], grad_T_hist[-1], grad_f_hist[-1])
 
-            clear_output(wait=True)
+            _clear_output()
             print(f"step {step + 1}, loss {loss.item():.4f}")
             if callback is not None:
                 callback(step, T, f)
@@ -343,7 +378,8 @@ def train_extragradient(T, f, sample_mu, sample_nu, cost,
                          n_steps, lr_T, lr_f,
                          batch_size_x=1024, batch_size_y=1024,
                          lr_schedule=None, log_every=500, callback=None, device=None,
-                         log_dir=None, grad_clip=None, use_adam=False, optimizer_kwargs=None):
+                         log_dir=None, grad_clip=None, use_adam=False, optimizer_kwargs=None,
+                         lr_schedule_every=None):
     """Extragradient: snapshot params, take a trial gradient-descent-ascent
     step, evaluate gradients at the trial point, restore, then apply the real
     step using the trial-point gradients.
@@ -356,6 +392,8 @@ def train_extragradient(T, f, sample_mu, sample_nu, cost,
     Args:
         lr_schedule: optional step -> (lr_T, lr_f), applied every log_every
             steps (to the optimizers' param groups when use_adam=True).
+        lr_schedule_every: if set, lr_schedule(step) is instead applied at the
+            start of every step divisible by it (1 = per-step, as LambdaLR).
         callback: optional (step, T, f), invoked every log_every steps.
         log_dir: optional directory to write a metrics.csv (step, loss, grad_T,
             grad_f) row every log_every steps.
@@ -383,6 +421,12 @@ def train_extragradient(T, f, sample_mu, sample_nu, cost,
     loss_hist, grad_T_hist, grad_f_hist = [], [], []
 
     for step in range(n_steps):
+        if lr_schedule is not None and lr_schedule_every and step % lr_schedule_every == 0:
+            lr_T, lr_f = lr_schedule(step)
+            if use_adam:
+                _set_lr(optimizer_T, lr_T)
+                _set_lr(optimizer_f, lr_f)
+
         x = sample_mu(batch_size_x).to(device)
         y = sample_nu(batch_size_y).to(device)
 
@@ -458,7 +502,7 @@ def train_extragradient(T, f, sample_mu, sample_nu, cost,
         grad_f_hist.append(grad_norm(f_grads_log).item())
 
         if (step + 1) % log_every == 0:
-            if lr_schedule is not None:
+            if lr_schedule is not None and not lr_schedule_every:
                 lr_T, lr_f = lr_schedule(step)
                 if use_adam:
                     for group in optimizer_T.param_groups:
@@ -468,7 +512,7 @@ def train_extragradient(T, f, sample_mu, sample_nu, cost,
 
             _append_metrics_log(metrics_csv_path, step + 1, loss_hist[-1], grad_T_hist[-1], grad_f_hist[-1])
 
-            clear_output(wait=True)
+            _clear_output()
             print(f"step {step + 1}, loss {loss.item():.4f}")
             if callback is not None:
                 callback(step, T, f)

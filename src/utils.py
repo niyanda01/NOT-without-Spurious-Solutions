@@ -1,3 +1,4 @@
+import glob
 import math
 import os
 import random
@@ -21,8 +22,34 @@ def set_seed(seed):
 
 
 def _save_current_fig(save_path):
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
+
+
+# Files one training run writes into its output directory (see
+# scripts/run_handbags_to_shoes.py and notebook 8).
+RUN_OUTPUT_PATTERNS = (
+    "config.json", "metrics.csv", "ot_metrics.csv",
+    "checkpoint.pt", "best_D_target.pt", "final.pt",
+    "samples_step_*.png", "final_samples.png", "loss.png", "grad_norm.png",
+)
+
+
+def prepare_run_dir(out_dir, overwrite=False):
+    """Give one training run sole ownership of out_dir.
+
+    A finished run (final.pt present) is never clobbered unless overwrite=True.
+    Otherwise the previous run's outputs (RUN_OUTPUT_PATTERNS, e.g. from a
+    crashed attempt) are deleted, so its metrics, samples and checkpoints never
+    mix with the new run's. Other files in out_dir are left alone."""
+    if os.path.exists(os.path.join(out_dir, "final.pt")) and not overwrite:
+        raise FileExistsError(
+            f"{out_dir} already holds a finished run (final.pt); use another "
+            "output directory or overwrite=True (--overwrite) to replace it")
+    os.makedirs(out_dir, exist_ok=True)
+    for pattern in RUN_OUTPUT_PATTERNS:
+        for path in glob.glob(os.path.join(glob.escape(out_dir), pattern)):
+            os.remove(path)
 
 
 def show_mapping(T, sample_mu, sample_nu, option=False, device=None,
@@ -91,9 +118,12 @@ def show_image_samples(T, x_fixed, y_fixed, method_name="T(x)", save_path=None, 
     """
     if device is None:
         device = next(T.parameters()).device
+    was_training = T.training
     T.eval()
     with torch.no_grad():
         output = T(x_fixed.to(device))
+    # Called from training callbacks, so hand T back in the mode it came in.
+    T.train(was_training)
     n = x_fixed.shape[0]
 
     fig, axes = plt.subplots(3, n, figsize=(1.5 * n, 4.5))
@@ -128,12 +158,14 @@ def cosine_decay(step, total_steps, lr_max):
     return lr_max * 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
-def warmup_cosine_decay(step, warmup_steps, decay_start, decay_end, lr_max, min_frac=0.0):
-    """Linear warm-up, a flat plateau at lr_max, then cosine decay to
-    lr_max * min_frac, matching the handbags/shoes schedule (warm-up through
-    warmup_steps, max through decay_start, cosine through decay_end, floor after)."""
+def warmup_cosine_decay(step, warmup_steps, decay_start, decay_end, lr_max, min_frac=0.0,
+                        start_frac=0.0):
+    """Linear warm-up from lr_max * start_frac, a flat plateau at lr_max, then
+    cosine decay to lr_max * min_frac, matching the handbags/shoes schedule
+    (warm-up through warmup_steps, max through decay_start, cosine through
+    decay_end, floor after)."""
     if step < warmup_steps:
-        return lr_max * step / warmup_steps
+        return lr_max * (start_frac + (1.0 - start_frac) * step / warmup_steps)
     if step < decay_start:
         return lr_max
     if step < decay_end:
