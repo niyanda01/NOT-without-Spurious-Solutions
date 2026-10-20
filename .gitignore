@@ -16,8 +16,9 @@ build/
 dist/
 *.egg-info/
 
-# Logs
+# Logs (incl. SLURM job output)
 *.log
+logs/
 
 # OS files
 .DS_Store
