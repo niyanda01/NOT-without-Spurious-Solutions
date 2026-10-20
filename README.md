@@ -24,9 +24,9 @@ The map may take a noise input $z \sim \xi$ so that it can split mass (weak OT; 
 
 ### What Is a Spurious Solution?
 
-If an OT map $T^\star$ and a Kantorovich potential $V^\star$ exist, the pair $(T^\star, V^\star)$ is a global solution of the Semi-Dual problem. The converse fails, however. For a fixed optimal potential $V^\star$, the inner minimization only asks $T$ to send each $x$ to *some* minimizer of $c(x, \cdot) - V^\star(\cdot)$. When this minimizer is not unique, which can happen when $\mu$ is not absolutely continuous (e.g., supported on a lower-dimensional set), many maps reach the optimal value without satisfying $T_\sharp(\mu\times\xi) = \nu$. Choi et al. (2025) call these global solutions that are not OT maps **spurious solutions**.
+If an OT map $T^\star$ and a Kantorovich potential $V^\star$ exist, the pair $(T^\star, V^\star)$ is a global solution of the Semi-Dual problem. The converse fails, however. For a fixed optimal potential $V^\star$, the inner minimization only asks $T$ to send each $x$ to *some* minimizer of $c(x, \cdot) - V^\star(\cdot)$. When this minimizer is not unique, which can happen when $\mu$ is not absolutely continuous (e.g., supported on a lower-dimensional set), many maps reach the optimal value without satisfying $T_\sharp(\mu\times\xi) = \nu$. Choi et al. (2025) refer to these global solutions that are not OT maps as **spurious solutions**.
 
-**Perpendicular example** (Choi et al., 2025). Let $\mu$ be uniform on the horizontal segment $[-1, 1]\times\{0\}$, $\nu$ uniform on the vertical segment $\{0\}\times[-1, 1]$, and $c(x, y) = \tfrac12\|x - y\|^2$. Every map with $T_\sharp(\mu\times\xi) = \nu$ is optimal, and $V^\star(y) = -|y_1| + \tfrac12 y_2^2$ is an optimal potential. For $x = (x_1, 0)$,
+**Perpendicular example** (Choi et al., 2025). Let $\mu$ be uniform on the horizontal segment $[-1, 1]\times\{0\}$, $\nu$ uniform on the vertical segment $\{0\}\times[-1, 1]$, and $c(x, y) = \tfrac12\|x - y\|^2$. Then $V^\star(y) = -|y_1| + \tfrac12 y_2^2$ is an optimal potential. For $x = (x_1, 0)$,
 
 ```math
 c(x, w) - V^\star(w) = \tfrac12 (w_1 - x_1)^2 + |w_1|,
@@ -40,9 +40,9 @@ which is minimized by any point with $w_1 = 0$, regardless of $w_2$. Hence the m
 
 ### Spurious Solutions Are Not Stationary
 
-A global solution of a nonconvex–nonconcave minimax problem need not be a stationary point (Jin et al., 2020). Our main result shows that this gap is exactly what separates spurious from non-spurious solutions.
+A global solution of a nonconvex–nonconcave minimax problem need not be a stationary point (Jin et al., 2020). Our main result shows that this gap is exactly what separates spurious from optimal solutions.
 
-> **Theorem (informal).** For the quadratic cost, a global solution $(T^\star, V^\star)$ of the Semi-Dual problem is non-spurious **if and only if** it is a stationary point, i.e., $\nabla_V \mathcal{L}(T^\star, V^\star) = 0$.
+> **Theorem 3.3 (simplified).** For the quadratic cost, a global solution $(T^\star, V^\star)$ of the Semi-Dual problem is non-spurious **if and only if** it is a stationary point, i.e., $\nabla_V \mathcal{L}(T^\star, V^\star) = 0$.
 
 The reason is that $\mathcal{L}$ is linear in $V$, and its derivative in the direction $\phi$ measures the mismatch between $\nu$ and the pushforward of $\mu$:
 
