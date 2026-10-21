@@ -159,9 +159,7 @@ Install `torch` and `torchvision` to match your CUDA version; see the [PyTorch w
 | MNIST red even → blue odd | TBU | [`notebook/7. NOT_MNIST_RedEven_BlueOdd.ipynb`](notebook/7.%20NOT_MNIST_RedEven_BlueOdd.ipynb) |
 | Handbags → Shoes | TBU | [`notebook/8. NOT_HandbagsToShoes.ipynb`](notebook/8.%20NOT_HandbagsToShoes.ipynb), [`scripts/run_handbags_to_shoes.py`](scripts/run_handbags_to_shoes.py) |
 
-**Choosing the formulation.** Set the two step sizes as in the table above.
-- Notebooks that call `train_extragradient` take them as `lr_T` and `lr_f`.
-- The MNIST 2 → 3 notebooks use one EG cell for both formulations, controlled by `T_LR` and `f_LR`, and separate GDmax cells for the Semi-Dual and Lagrangian problems.
+**Notebook layout and step sizes.** Each notebook has one section per method: GDmax, EG, TTS-EG (Semi-Dual), TTS-EG (Lagrangian) and OGDA (Optimistic Adam, `src/optim.py`). Every section seeds the RNG and builds fresh networks, so the sections can be run independently. The step sizes come from a table at the top of the notebook: `RECOMMENDED` in notebook 3 (per 2D dataset, with the schedule) and `LR` in notebooks 5–8. These values were chosen by sweeping step sizes and schedules and taking the lowest mean $D_\text{target}$ over three seeds. The TTS-EG sections differ from EG only in the ratio $\gamma_T / \gamma_V$, as in the table above.
 
 **Handbags → Shoes.** Download the data, then optionally build the preprocessing cache once. Otherwise the cache is built on first use.
 
