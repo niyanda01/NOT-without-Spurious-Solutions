@@ -34,6 +34,71 @@ class LoaderSampler:
         return images.to(self.device) if self.device is not None else images
 
 
+def _uniform(batch_size, device):
+    return 2 * torch.rand(batch_size, 1, device=device) - 1
+
+
+def _grid_values(batch_size, device, n_grid=5):
+    """Uniform over the odd grid points {-3/4, -1/4, 1/4, 3/4} of linspace(-1, 1, 9)."""
+    grid = torch.linspace(-1, 1, 2 * n_grid - 1, device=device)
+    idx = 2 * torch.randint(1, n_grid, (batch_size,), device=device) - 1
+    return grid[idx].unsqueeze(1)
+
+
+def _segment_mu(batch_size, device="cpu"):
+    x = _uniform(batch_size, device)
+    return torch.cat([x, torch.zeros(batch_size, 1, device=device)], dim=1)
+
+
+def _perpendicular_nu(batch_size, device="cpu"):
+    y = _uniform(batch_size, device)
+    return torch.cat([torch.zeros(batch_size, 1, device=device), y], dim=1)
+
+
+def _horizontal_nu(batch_size, device="cpu"):
+    x = _uniform(batch_size, device)
+    return torch.cat([x, torch.ones(batch_size, 1, device=device)], dim=1)
+
+
+def _one_to_many_nu(batch_size, device="cpu"):
+    x = _uniform(batch_size, device)
+    sign = torch.randint(0, 2, (batch_size, 1), device=device) * 2 - 1
+    return torch.cat([x, sign.float()], dim=1)
+
+
+def _grid_mu(batch_size, device="cpu"):
+    y = _grid_values(batch_size, device)
+    x = _uniform(batch_size, device)
+    return torch.cat([x, y], dim=1)
+
+
+def _grid_nu(batch_size, device="cpu"):
+    x = _grid_values(batch_size, device)
+    y = _uniform(batch_size, device)
+    return torch.cat([x, y], dim=1)
+
+
+# name -> (sample_mu, sample_nu, W2^2(mu, nu) = min E||x - y||^2, derived analytically)
+TOY_DATASETS = {
+    # mu on [-1, 1] x {0}, nu on {0} x [-1, 1]: every coupling costs 1/3 + 1/3.
+    "perpendicular": (_segment_mu, _perpendicular_nu, 2 / 3),
+    # nu is mu shifted up by 1.
+    "horizontal": (_segment_mu, _horizontal_nu, 1.0),
+    # nu on the segments y = +1 and y = -1; x is kept, the mass splits evenly.
+    "one_to_many": (_segment_mu, _one_to_many_nu, 1.0),
+    # "Grid" / Multi-Perpendicular: four horizontal segments to four vertical ones.
+    "grid": (_grid_mu, _grid_nu, 1 / 24),
+}
+
+
+def toy_dataset(name):
+    """2D datasets of Choi et al. (2025) used in notebooks 1-4: returns
+    (sample_mu, sample_nu, W2^2) with sample_*(batch_size, device="cpu")."""
+    if name not in TOY_DATASETS:
+        raise ValueError(f"unknown toy dataset {name!r}; choose from {list(TOY_DATASETS)}")
+    return TOY_DATASETS[name]
+
+
 class ColoredParityMNIST(Dataset):
     """Even digits in red, odd digits in blue, normalized to [-1, 1]."""
 

@@ -175,6 +175,24 @@ def warmup_cosine_decay(step, warmup_steps, decay_start, decay_end, lr_max, min_
     return lr_max * min_frac
 
 
+def step_size_schedule(kind, lr_T, lr_f, n_steps):
+    """Per-step schedule step -> (lr_T, lr_f) for train_* with lr_schedule_every=1.
+
+    kind: "const" (returns None, i.e. no schedule), "cosine" (cosine decay to 0
+    at n_steps), "linear" (linear decay to 0 at n_steps) or "nb1"
+    (cosine_lr(step, 10000, lr, lr / 100), a fast early decay followed by a
+    slow one)."""
+    if kind == "const":
+        return None
+    if kind == "cosine":
+        return lambda step: (cosine_decay(step, n_steps, lr_T), cosine_decay(step, n_steps, lr_f))
+    if kind == "linear":
+        return lambda step: (lr_T * (1 - step / n_steps), lr_f * (1 - step / n_steps))
+    if kind == "nb1":
+        return lambda step: (cosine_lr(step, 10000, lr_T, lr_T / 100), cosine_lr(step, 10000, lr_f, lr_f / 100))
+    raise ValueError(f"unknown schedule {kind!r}")
+
+
 def sigma_schedule(k, K, P=2000, sigma_max=0.2, sigma_min=0.05):
     t = (P * (k // P) + 1) / K
     return (1 - t) * sigma_max + t * sigma_min
