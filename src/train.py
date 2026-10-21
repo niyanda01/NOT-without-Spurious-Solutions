@@ -7,6 +7,7 @@ import torch
 from IPython import get_ipython
 from IPython.display import clear_output
 
+from src.optim import OptimisticAdam
 from src.utils import grad_norm
 
 
@@ -277,23 +278,27 @@ def train_ogda(T, f, sample_mu, sample_nu, cost,
                batch_size_x=1024, batch_size_y=1024,
                noise_fn=None, lr_schedule=None,
                log_every=500, callback=None, device=None, log_dir=None,
-               grad_clip=None, optimizer_kwargs=None):
-    """Optimistic GDA (OAdam): each Adam step uses the extrapolated gradient
-    2*g_t - g_{t-1} in place of the raw gradient g_t, so the update
-    anticipates the opponent's next move instead of reacting to the last one.
-    The very first step falls back to the raw gradient (g_{-1} := g_0).
+               grad_clip=None, optimizer_kwargs=None, lr_schedule_every=None):
+    """Optimistic GDA through Optimistic Adam (src/optim.py): one simultaneous
+    gradient evaluation per step, after which T and f each move by
+    2 u_t - u_{t-1}, where u_t is the Adam-normalized step. T minimizes and f
+    maximizes the same loss, as in the other training loops; the step sizes
+    lr_T, lr_f play the roles of gamma_T, gamma_V.
 
     Args:
         noise_fn: optional (step, x) -> x, applied to each mu-batch before use.
         lr_schedule: optional step -> (lr_T, lr_f), applied to the optimizers'
             param groups every log_every steps.
+        lr_schedule_every: if set, lr_schedule(step) is instead applied at the
+            start of every step divisible by it (1 = per-step, as LambdaLR).
         callback: optional (step, T, f), invoked every log_every steps.
         log_dir: optional directory to write a metrics.csv (step, loss, grad_T,
             grad_f) row every log_every steps.
         grad_clip: optional max gradient norm, applied to T and f separately
-            before each optimizer step (on the raw, non-extrapolated gradient).
-        optimizer_kwargs: optional dict merged into both Adam constructors
-            (e.g. betas, amsgrad, weight_decay).
+            before each optimizer step.
+        optimizer_kwargs: optional dict merged into both OptimisticAdam
+            constructors (betas, eps, weight_decay, amsgrad), so OGDA can reuse
+            an experiment's Adam settings.
 
     Returns:
         {"loss": [...], "grad_T": [...], "grad_f": [...]}
@@ -304,15 +309,18 @@ def train_ogda(T, f, sample_mu, sample_nu, cost,
     metrics_csv_path = _init_metrics_log(log_dir)
     optimizer_kwargs = optimizer_kwargs or {}
 
-    optimizer_T = torch.optim.Adam(T.parameters(), lr=lr_T, **optimizer_kwargs)
-    optimizer_f = torch.optim.Adam(f.parameters(), lr=lr_f, maximize=True, **optimizer_kwargs)
-
     T_params, f_params = list(T.parameters()), list(f.parameters())
-    T_prev_grads, f_prev_grads = None, None
+    optimizer_T = OptimisticAdam(T_params, lr=lr_T, **optimizer_kwargs)
+    optimizer_f = OptimisticAdam(f_params, lr=lr_f, maximize=True, **optimizer_kwargs)
 
     loss_hist, grad_T_hist, grad_f_hist = [], [], []
 
     for step in range(n_steps):
+        if lr_schedule is not None and lr_schedule_every and step % lr_schedule_every == 0:
+            new_lr_T, new_lr_f = lr_schedule(step)
+            _set_lr(optimizer_T, new_lr_T)
+            _set_lr(optimizer_f, new_lr_f)
+
         x = sample_mu(batch_size_x).to(device)
         y = sample_nu(batch_size_y).to(device)
         if noise_fn is not None:
@@ -327,24 +335,8 @@ def train_ogda(T, f, sample_mu, sample_nu, cost,
         if grad_clip is not None:
             torch.nn.utils.clip_grad_norm_(T_params, grad_clip)
             torch.nn.utils.clip_grad_norm_(f_params, grad_clip)
-
-        T_grads = [p.grad.detach().clone() for p in T_params]
-        f_grads = [p.grad.detach().clone() for p in f_params]
-
-        if T_prev_grads is None:
-            T_prev_grads = [g.clone() for g in T_grads]
-        if f_prev_grads is None:
-            f_prev_grads = [g.clone() for g in f_grads]
-
-        for p, g, g_prev in zip(T_params, T_grads, T_prev_grads):
-            p.grad = 2 * g - g_prev
-        for p, g, g_prev in zip(f_params, f_grads, f_prev_grads):
-            p.grad = 2 * g - g_prev
-
         optimizer_T.step()
         optimizer_f.step()
-
-        T_prev_grads, f_prev_grads = T_grads, f_grads
 
         Tx = T(x)
         loss = cost(x, Tx).mean() - f(Tx).mean() + f(y).mean()
@@ -357,12 +349,10 @@ def train_ogda(T, f, sample_mu, sample_nu, cost,
         grad_f_hist.append(grad_norm(f_grads_log).item())
 
         if (step + 1) % log_every == 0:
-            if lr_schedule is not None:
+            if lr_schedule is not None and not lr_schedule_every:
                 new_lr_T, new_lr_f = lr_schedule(step)
-                for group in optimizer_T.param_groups:
-                    group["lr"] = new_lr_T
-                for group in optimizer_f.param_groups:
-                    group["lr"] = new_lr_f
+                _set_lr(optimizer_T, new_lr_T)
+                _set_lr(optimizer_f, new_lr_f)
 
             _append_metrics_log(metrics_csv_path, step + 1, loss_hist[-1], grad_T_hist[-1], grad_f_hist[-1])
 

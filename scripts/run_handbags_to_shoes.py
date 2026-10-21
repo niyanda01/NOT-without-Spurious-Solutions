@@ -6,7 +6,8 @@ channel and the shoe's B channel remain. Following the paper's original
 training code (NOT_training_strong.py), the LR schedule (warm-up from 0.1x,
 hold, cosine to 0.05x) is applied every step, EG steps through Adam, GDmax
 draws fresh batches for every T/f step, and D_cost / D_target are evaluated
-on fixed supports.
+on fixed supports. --method ogda trains with Optimistic Adam (src/optim.py)
+using the same Adam hyperparameters.
 
 Each run owns its --out-dir: its settings are saved to config.json, leftovers
 of an earlier unfinished run there are cleared first, and a finished run
@@ -18,6 +19,7 @@ scripts/preprocess_product_data.py beforehand to build it once up front).
 Usage (from the repo root):
     python scripts/run_handbags_to_shoes.py --method eg
     python scripts/run_handbags_to_shoes.py --method gdmax --keep-background
+    python scripts/run_handbags_to_shoes.py --method ogda
 """
 import argparse
 import json
@@ -37,18 +39,18 @@ import torch.nn.functional as F
 from src.datasets import LoaderSampler, build_handbags_to_shoes
 from src.ot_metrics import OTEvaluator, log_ot_metrics
 from src.models import PotentialResNet, TransportUNet, warmup_spectral_norm
-from src.train import train_extragradient, train_gdmax
+from src.train import train_extragradient, train_gdmax, train_ogda
 from src.utils import (plot_grad_norm, plot_loss, prepare_run_dir, set_seed,
                        show_image_samples, warmup_cosine_decay)
 
 ADAM_KWARGS = dict(betas=(0.0, 0.9), weight_decay=1e-10, amsgrad=True)
 # Notebook 8 defaults per method: (lr_T, lr_f).
-DEFAULT_LRS = {"gdmax": (5e-5, 5e-5), "eg": (1e-4, 1e-4)}
+DEFAULT_LRS = {"gdmax": (5e-5, 5e-5), "eg": (1e-4, 1e-4), "ogda": (1e-4, 1e-4)}
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--method", choices=["gdmax", "eg"], required=True)
+    parser.add_argument("--method", choices=["gdmax", "eg", "ogda"], required=True)
     parser.add_argument("--data-root", default=os.path.join(REPO_ROOT, "data"))
     parser.add_argument("--out-dir", default=None,
                         help="default: outputs/handbags_to_shoes[_whitebg]/<method>")
@@ -170,9 +172,11 @@ def main():
     if args.method == "gdmax":
         history = train_gdmax(T, f, sample_mu, sample_nu, F.mse_loss, K=args.K,
                               resample_each_step=not args.gdmax_reuse_batch, **common)
-    else:
+    elif args.method == "eg":
         history = train_extragradient(T, f, sample_mu, sample_nu, F.mse_loss,
                                       use_adam=not args.eg_plain_gd, **common)
+    else:
+        history = train_ogda(T, f, sample_mu, sample_nu, F.mse_loss, **common)
 
     torch.save({"T": T.state_dict(), "f": f.state_dict()},
                os.path.join(out_dir, "final.pt"))
