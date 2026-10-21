@@ -70,3 +70,37 @@ class OptimisticAdam(torch.optim.Optimizer):
                 state["prev_update"] = update
 
         return loss
+
+
+class OptimisticSGD(torch.optim.Optimizer):
+    """Optimistic gradient descent (OGDA without Adam): the parameters move by
+    -lr * (2 g_t - g_{t-1}), with g_{-1} = 0. weight_decay adds an L2 term to
+    the gradient and maximize ascends, as in torch.optim.SGD."""
+
+    def __init__(self, params, lr=1e-3, weight_decay=0.0, maximize=False):
+        if lr < 0.0:
+            raise ValueError(f"Invalid learning rate: {lr}")
+        super().__init__(params, dict(lr=lr, weight_decay=weight_decay, maximize=maximize))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                grad = -p.grad if group["maximize"] else p.grad
+                if group["weight_decay"]:
+                    grad = grad.add(p, alpha=group["weight_decay"])
+                state = self.state[p]
+                prev = state.get("prev_grad")
+                update = 2 * grad if prev is None else 2 * grad - prev
+                p.add_(update, alpha=-group["lr"])
+                state["prev_grad"] = grad.clone()
+
+        return loss
+

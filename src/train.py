@@ -7,7 +7,7 @@ import torch
 from IPython import get_ipython
 from IPython.display import clear_output
 
-from src.optim import OptimisticAdam
+from src.optim import OptimisticAdam, OptimisticSGD
 from src.utils import grad_norm
 
 
@@ -56,8 +56,13 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
                  noise_fn=None, lr_schedule=None,
                  log_every=500, callback=None, device=None, log_dir=None,
                  grad_clip=None, optimizer_kwargs=None, lr_schedule_every=None,
-                 resample_each_step=False):
-    """GDmax: K inner Adam steps minimizing over T, then one Adam step maximizing over f.
+                 resample_each_step=True, inner="T"):
+    """GDmax: K inner Adam steps that approximate the inner optimization, then
+    one Adam step on the outer player, as in the original NOT code.
+
+    inner="T" (Semi-Dual, max_V min_T): K descent steps on T, then one ascent
+    step on f. inner="f" (Lagrangian, min_T max_V): K ascent steps on f, then
+    one descent step on T.
 
     Args:
         noise_fn: optional (step, x) -> x, applied to each mu-batch before use.
@@ -72,13 +77,16 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
             before each optimizer step.
         optimizer_kwargs: optional dict merged into both Adam constructors
             (e.g. betas, amsgrad, weight_decay).
-        resample_each_step: if True, draw a fresh mu-batch for every inner T
-            step and fresh mu/nu-batches for the f step (as in the original
-            NOT code) instead of reusing one pair of batches for all K+1 steps.
+        resample_each_step: if True (default), every step draws fresh batches
+            for what it uses (mu for a T step, mu and nu for an f step). False
+            reuses one pair of batches for all K+1 steps.
+        inner: which player takes the K inner steps, "T" or "f".
 
     Returns:
         {"loss": [...], "grad_T": [...], "grad_f": [...]}
     """
+    if inner not in ("T", "f"):
+        raise ValueError(f"inner must be 'T' or 'f', got {inner!r}")
     if device is None:
         device = next(T.parameters()).device
 
@@ -87,6 +95,26 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
 
     optimizer_T = torch.optim.Adam(T.parameters(), lr=lr_T, **optimizer_kwargs)
     optimizer_f = torch.optim.Adam(f.parameters(), lr=lr_f, maximize=True, **optimizer_kwargs)
+    if inner == "T":
+        inner_net, inner_opt, outer_net, outer_opt = T, optimizer_T, f, optimizer_f
+    else:
+        inner_net, inner_opt, outer_net, outer_opt = f, optimizer_f, T, optimizer_T
+
+    def sample_x(step):
+        x = sample_mu(batch_size_x).to(device)
+        return noise_fn(step, x) if noise_fn is not None else x
+
+    def sample_y():
+        return sample_nu(batch_size_y).to(device)
+
+    def take_step(net, optimizer, x, y):
+        Tx = T(x)
+        loss = cost(x, Tx).mean() - f(Tx).mean() + f(y).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(net.parameters(), grad_clip)
+        optimizer.step()
 
     loss_hist, grad_T_hist, grad_f_hist = [], [], []
 
@@ -96,39 +124,21 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
             _set_lr(optimizer_T, new_lr_T)
             _set_lr(optimizer_f, new_lr_f)
 
-        x = sample_mu(batch_size_x).to(device)
-        y = sample_nu(batch_size_y).to(device)
-        if noise_fn is not None:
-            x = noise_fn(step, x)
+        x = sample_x(step)
+        y = sample_y()
 
         for k in range(K):
             if resample_each_step and k > 0:
-                x = sample_mu(batch_size_x).to(device)
-                if noise_fn is not None:
-                    x = noise_fn(step, x)
-            Tx = T(x)
-            loss = cost(x, Tx).mean() - f(Tx).mean() + f(y).mean()
-
-            optimizer_T.zero_grad()
-            loss.backward()
-            if grad_clip is not None:
-                torch.nn.utils.clip_grad_norm_(T.parameters(), grad_clip)
-            optimizer_T.step()
+                x = sample_x(step)
+                if inner == "f":
+                    y = sample_y()
+            take_step(inner_net, inner_opt, x, y)
 
         if resample_each_step:
-            x = sample_mu(batch_size_x).to(device)
-            y = sample_nu(batch_size_y).to(device)
-            if noise_fn is not None:
-                x = noise_fn(step, x)
-
-        Tx = T(x)
-        loss = cost(x, Tx).mean() - f(Tx).mean() + f(y).mean()
-
-        optimizer_f.zero_grad()
-        loss.backward()
-        if grad_clip is not None:
-            torch.nn.utils.clip_grad_norm_(f.parameters(), grad_clip)
-        optimizer_f.step()
+            x = sample_x(step)
+            if inner == "T":
+                y = sample_y()
+        take_step(outer_net, outer_opt, x, y)
 
         Tx = T(x)
         loss = cost(x, Tx).mean() - f(Tx).mean() + f(y).mean()
@@ -143,10 +153,8 @@ def train_gdmax(T, f, sample_mu, sample_nu, cost,
         if (step + 1) % log_every == 0:
             if lr_schedule is not None and not lr_schedule_every:
                 new_lr_T, new_lr_f = lr_schedule(step)
-                for group in optimizer_T.param_groups:
-                    group["lr"] = new_lr_T
-                for group in optimizer_f.param_groups:
-                    group["lr"] = new_lr_f
+                _set_lr(optimizer_T, new_lr_T)
+                _set_lr(optimizer_f, new_lr_f)
 
             _append_metrics_log(metrics_csv_path, step + 1, loss_hist[-1], grad_T_hist[-1], grad_f_hist[-1])
 
@@ -278,7 +286,8 @@ def train_ogda(T, f, sample_mu, sample_nu, cost,
                batch_size_x=1024, batch_size_y=1024,
                noise_fn=None, lr_schedule=None,
                log_every=500, callback=None, device=None, log_dir=None,
-               grad_clip=None, optimizer_kwargs=None, lr_schedule_every=None):
+               grad_clip=None, optimizer_kwargs=None, lr_schedule_every=None,
+               use_adam=True):
     """Optimistic GDA through Optimistic Adam (src/optim.py): one simultaneous
     gradient evaluation per step, after which T and f each move by
     2 u_t - u_{t-1}, where u_t is the Adam-normalized step. T minimizes and f
@@ -299,6 +308,9 @@ def train_ogda(T, f, sample_mu, sample_nu, cost,
         optimizer_kwargs: optional dict merged into both OptimisticAdam
             constructors (betas, eps, weight_decay, amsgrad), so OGDA can reuse
             an experiment's Adam settings.
+        use_adam: if False, take plain optimistic gradient steps instead
+            (OptimisticSGD: move by 2 g_t - g_{t-1}), the counterpart of
+            train_extragradient(use_adam=False).
 
     Returns:
         {"loss": [...], "grad_T": [...], "grad_f": [...]}
@@ -310,8 +322,9 @@ def train_ogda(T, f, sample_mu, sample_nu, cost,
     optimizer_kwargs = optimizer_kwargs or {}
 
     T_params, f_params = list(T.parameters()), list(f.parameters())
-    optimizer_T = OptimisticAdam(T_params, lr=lr_T, **optimizer_kwargs)
-    optimizer_f = OptimisticAdam(f_params, lr=lr_f, maximize=True, **optimizer_kwargs)
+    optimizer_cls = OptimisticAdam if use_adam else OptimisticSGD
+    optimizer_T = optimizer_cls(T_params, lr=lr_T, **optimizer_kwargs)
+    optimizer_f = optimizer_cls(f_params, lr=lr_f, maximize=True, **optimizer_kwargs)
 
     loss_hist, grad_T_hist, grad_f_hist = [], [], []
 
